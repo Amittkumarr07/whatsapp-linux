@@ -1,0 +1,7 @@
+/target/
+/whatsapp-rust.deb
+/package-folder/usr/bin/whatsapp-ui
+/package-folder/usr/bin/whatsapp-daemon
+*.db
+*.db-shm
+*.db-wal

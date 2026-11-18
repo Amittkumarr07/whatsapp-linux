@@ -1,0 +1,8 @@
+Package: whatsapp-linux
+Version: 0.1.0
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: aks
+Depends: libc6, libgcc-s1
+Description: Unofficial WhatsApp desktop client for Linux

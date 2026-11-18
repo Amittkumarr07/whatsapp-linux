@@ -1,0 +1,14 @@
+[package]
+name = "whatsapp-ui"
+version = "0.1.0"
+edition = "2024"
+
+# The UI only speaks JSON over the daemon socket: no protocol, no storage, no shared crate.
+[dependencies]
+iced = { version = "0.14", features = ["tokio", "qr_code", "image"] }
+tokio = { version = "1", features = ["net", "io-util", "time", "process"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Local-time formatting for message timestamps (already in Cargo.lock via other deps).
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg"] }

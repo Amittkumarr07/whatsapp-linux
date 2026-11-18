@@ -1,0 +1,25 @@
+[package]
+name = "whatsapp-daemon"
+version = "0.1.0"
+edition = "2024"
+
+# Protocol crates pinned to 0.5 (the line whose source I read; 0.7 exists and may differ).
+# If a sibling has no 0.5 release, loosen all four together.
+[dependencies]
+whatsapp-rust = "0.5"
+whatsapp-rust-tokio-transport = "0.5"
+whatsapp-rust-ureq-http-client = "0.5"
+wacore = "0.5"
+waproto = "0.5" # wa::Message; version assumed to track the 0.5 line
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Same SQLite binding the protocol crate already uses (a second one would clash on libsqlite3-sys).
+diesel = { version = "2.3", default-features = false, features = ["sqlite"] }
+diesel_migrations = { version = "2.3", default-features = false, features = ["sqlite"] }
+notify-rust = "4"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+ureq = "3"
