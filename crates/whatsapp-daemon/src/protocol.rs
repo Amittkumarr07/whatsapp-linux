@@ -41,6 +41,31 @@ fn safe_ext(name: &str) -> String {
         .unwrap_or_else(|| "bin".into())
 }
 
+/// Extension for a received document: from its file name, else from its MIME type, so a PDF whose
+/// name has no ".pdf" is still stored as `.pdf` and the desktop knows which viewer to start.
+fn ext_for_doc(name: &str, mime: Option<&str>) -> String {
+    let ext = safe_ext(name);
+    if ext != "bin" {
+        return ext;
+    }
+    match mime.unwrap_or("") {
+        "application/pdf" => "pdf",
+        "text/plain" => "txt",
+        "text/csv" => "csv",
+        "application/zip" => "zip",
+        "image/png" => "png",
+        "image/jpeg" => "jpg",
+        "application/msword" => "doc",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document" => "docx",
+        "application/vnd.ms-excel" => "xls",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" => "xlsx",
+        "application/vnd.ms-powerpoint" => "ppt",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation" => "pptx",
+        _ => "bin",
+    }
+    .to_string()
+}
+
 fn mime_for(ext: &str) -> &'static str {
     match ext {
         "pdf" => "application/pdf",
@@ -81,13 +106,25 @@ async fn download_document(
     msg_id: &str,
     doc: &waproto::whatsapp::message::DocumentMessage,
 ) -> Option<String> {
-    let sha = doc.file_sha256.as_deref().filter(|s| s.len() == 32)?;
-    if doc.file_length.unwrap_or(u64::MAX) > MAX_DOC_BYTES {
+    let Some(sha) = doc.file_sha256.as_deref().filter(|s| s.len() == 32) else {
+        tracing::warn!(msg_id, "document has no usable checksum; not downloaded");
+        return None;
+    };
+    // A missing length is not a reason to refuse: the real size is checked after the download.
+    if doc.file_length.is_some_and(|l| l > MAX_DOC_BYTES) {
+        tracing::warn!(msg_id, "document is larger than the {MAX_DOC_BYTES} byte cap; not downloaded");
         return None;
     }
     let _slot = downloads.acquire().await.ok()?;
-    let bytes = client.download(doc).await.ok()?;
+    let bytes = match client.download(doc).await {
+        Ok(b) => b,
+        Err(e) => {
+            tracing::warn!(msg_id, error = %e, "document download failed");
+            return None;
+        }
+    };
     if bytes.len() as u64 > MAX_DOC_BYTES {
+        tracing::warn!(msg_id, "downloaded document exceeds the size cap; dropped");
         return None;
     }
     // The hash is the sender's claim, so the message id is part of the name: a sender cannot make
@@ -98,13 +135,18 @@ async fn download_document(
         .filter(char::is_ascii_alphanumeric)
         .take(40)
         .collect();
-    store_file(
+    match store_file(
         dir,
         &format!("{hex}-{tag}"),
-        &safe_ext(doc.file_name.as_deref().unwrap_or("")),
+        &ext_for_doc(doc.file_name.as_deref().unwrap_or(""), doc.mimetype.as_deref()),
         &bytes,
-    )
-    .ok()
+    ) {
+        Ok(p) => Some(p),
+        Err(e) => {
+            tracing::warn!(msg_id, error = %e, "could not save document");
+            None
+        }
+    }
 }
 
 /// Reads, uploads and sends one file. Errors are generic strings: the cause goes to the log only.
@@ -167,6 +209,32 @@ async fn send_file(
         "send failed".to_string()
     })?;
     Ok((id, name))
+}
+
+/// WhatsApp wraps many messages in an envelope: a document that has a caption, a message sent from
+/// your own phone, a disappearing-chat message. The payload (e.g. `document_message`) lives inside
+/// the envelope, so looking only at the top level misses it and the file is never downloaded.
+/// `Borrow` lets this work whether the generated field is boxed or not.
+fn unwrap_message(m: &waproto::whatsapp::Message) -> &waproto::whatsapp::Message {
+    use std::borrow::Borrow;
+    fn inner<B: Borrow<waproto::whatsapp::Message>>(o: &Option<B>) -> Option<&waproto::whatsapp::Message> {
+        o.as_ref().map(|b| b.borrow())
+    }
+    let mut cur = m;
+    for _ in 0..4 {
+        let next = cur
+            .document_with_caption_message
+            .as_ref()
+            .and_then(|f| inner(&f.message))
+            .or_else(|| cur.ephemeral_message.as_ref().and_then(|f| inner(&f.message)))
+            .or_else(|| cur.view_once_message.as_ref().and_then(|f| inner(&f.message)))
+            .or_else(|| cur.device_sent_message.as_ref().and_then(|d| inner(&d.message)));
+        match next {
+            Some(n) => cur = n,
+            None => break,
+        }
+    }
+    cur
 }
 
 fn media_kind(m: &waproto::whatsapp::Message) -> Option<&'static str> {
@@ -629,8 +697,9 @@ impl Protocol for WhatsApp {
                             for info in sync.status_v3_messages {
                                 let key = info.key;
                                 let (Some(id), Some(chat), Some(msg)) = (key.id, key.remote_jid, info.message) else { continue };
-                                let kind = media_kind(&msg);
-                                let mut body = text_of(&msg);
+                                let msg = unwrap_message(&msg);
+                                let kind = media_kind(msg);
+                                let mut body = text_of(msg);
                                 if body.is_none() && kind.is_none() { continue; }
                                 if let Some(img) = msg.image_message.as_deref() { body = body.or_else(|| img.caption.clone()); }
                                 if let Some(d) = msg.document_message.as_deref() { body = body.or_else(|| doc_label(d)); }
@@ -669,8 +738,9 @@ impl Protocol for WhatsApp {
                                         }
                                     }
                                     let Some(msg) = info.message else { continue };
-                                    let kind = media_kind(&msg);
-                                    let mut body = text_of(&msg);
+                                    let msg = unwrap_message(&msg);
+                                    let kind = media_kind(msg);
+                                    let mut body = text_of(msg);
                                     if body.is_none() && kind.is_none() { continue; }
                                     if let Some(img) = msg.image_message.as_deref() { body = body.or_else(|| img.caption.clone()); }
                                 if let Some(d) = msg.document_message.as_deref() { body = body.or_else(|| doc_label(d)); }
@@ -703,16 +773,17 @@ impl Protocol for WhatsApp {
                                     let _ = contacts.send(Contact { jid: pn, name: info.push_name.clone(), pn: None, avatar_path: None }).await;
                                 }
                             }
+                            let msg = unwrap_message(&msg);
                             let img = msg.image_message.as_deref().cloned();
                             let doc = msg.document_message.as_deref().cloned();
-                            let kind = media_kind(&msg);
+                            let kind = media_kind(msg);
                             let mut m = Incoming {
                                 id: info.id.clone(),
                                 chat: info.source.chat.to_string(),
                                 sender: info.source.sender.to_string(),
                                 from_me: info.source.is_from_me,
                                 ts: info.timestamp.timestamp(),
-                                text: text_of(&msg),
+                                text: text_of(msg),
                                 media_kind: kind.map(str::to_string),
                                 media_path: None,
                                 historical: false,

@@ -175,7 +175,7 @@ struct Line {
     seq: Option<i64>, // present on history rows only; it is the pagination cursor
     text: Option<String>,
     media_kind: Option<String>,
-    media_path: Option<String>, // local file, set only for downloaded images
+    media_path: Option<String>, // local file, set for downloaded images and documents
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -215,6 +215,7 @@ enum Message {
     CancelFile,
     FileSent(Result<Value, String>),
     OpenFile(String),
+    FileOpened(Result<(), String>),
     SyncStart(Option<String>),
     SyncStarted(Result<Value, String>),
     SyncStatus(Result<Value, String>),
@@ -387,6 +388,46 @@ async fn pick_file() -> Result<Option<String>, String> {
         }
     }
     Err("No file dialog found. Install zenity (GNOME) or kdialog (KDE), or drag a file onto the window.".into())
+}
+
+/// Opens a downloaded file with the desktop's default app. Unlike a fire-and-forget spawn this waits
+/// for the launcher's exit status, so "no PDF viewer", "file is gone" and similar show up as an error
+/// instead of nothing happening.
+async fn open_path(path: String) -> Result<(), String> {
+    use std::process::Stdio;
+    if !std::path::Path::new(&path).is_file() {
+        return Err(format!("The file is no longer on disk: {path}"));
+    }
+    let mut last = String::new();
+    let launchers: [(&str, &[&str]); 2] = [("xdg-open", &[]), ("gio", &["open"])];
+    for (cmd, args) in launchers {
+        let out = tokio::process::Command::new(cmd)
+            .args(args)
+            .arg(&path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await;
+        match out {
+            Ok(o) if o.status.success() => return Ok(()),
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr).trim().to_string();
+                last = format!(
+                    "{cmd} could not open the file ({}){}. Is a viewer for this file type installed?",
+                    o.status,
+                    if err.is_empty() { String::new() } else { format!(": {err}") }
+                );
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(format!("cannot run {cmd}: {e}")),
+        }
+    }
+    Err(if last.is_empty() {
+        "Neither xdg-open nor gio is installed, so files cannot be opened.".into()
+    } else {
+        last
+    })
 }
 
 fn load(chat: String, before: Option<(i64, i64)>) -> Task<Message> {
@@ -676,21 +717,13 @@ impl App {
                 self.error = Some(e);
             }
             Message::OpenFile(p) => {
-                use std::process::{Command, Stdio};
-                match Command::new("xdg-open")
-                    .arg(&p)
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null())
-                    .spawn()
-                {
-                    Ok(mut child) => {
-                        std::thread::spawn(move || {
-                            let _ = child.wait();
-                        });
-                    } // reap, never block the UI
-                    Err(e) => self.error = Some(format!("cannot run xdg-open: {e}")),
-                }
+                self.log(format!("Opening {p}"));
+                return Task::perform(open_path(p), Message::FileOpened);
+            }
+            Message::FileOpened(Ok(())) => self.error = None,
+            Message::FileOpened(Err(e)) => {
+                self.log(format!("Open file failed: {e}"));
+                self.error = Some(e);
             }
             Message::ToggleLog => {
                 self.show_sidebar_menu = false;
@@ -990,6 +1023,20 @@ impl App {
                             .on_press(Message::OpenFile(p.clone())),
                     );
                 }
+                if l.media_kind.as_deref() == Some("document") {
+                    item = match &l.media_path {
+                        Some(p) => item.push(
+                            button(text("Open file").size(13))
+                                .on_press(Message::OpenFile(p.clone()))
+                                .style(subtle_button_style),
+                        ),
+                        None => item.push(
+                            text("File not saved on this computer (received before the daemon could download it, or the download failed; see the daemon log)")
+                                .size(11)
+                                .color(Color::from_rgb(0.66, 0.69, 0.70)),
+                        ),
+                    };
+                }
                 let bubble = container(item).padding(8).max_width(500.0).style(move |_| {
                     iced::widget::container::Style {
                         background: Some(if l.from_me {
@@ -1135,7 +1182,14 @@ impl App {
                     right = right.push(chat_actions);
                 }
             }
-            right = right.push(scrollable(convo).width(Length::Fill).height(Length::Fill));
+            // anchor_bottom: the view starts at, and stays pinned to, the newest message. History is loaded
+            // newest-first, so without this the chat opened at the top (the oldest loaded message).
+            right = right.push(
+                scrollable(convo)
+                    .anchor_bottom()
+                    .width(Length::Fill)
+                    .height(Length::Fill),
+            );
             if self.open.is_none() {
                 right = right.push(container(column![text("Keep your conversations close").size(22), text("Choose a chat to view messages, or start a new conversation from the left.")]).center_x(Length::Fill).center_y(Length::Fill).width(Length::Fill).height(Length::Fill));
             }
