@@ -1,0 +1,19 @@
+[Unit]
+Description=WhatsApp daemon (unofficial)
+
+[Service]
+ExecStart=/usr/bin/whatsapp-daemon
+Environment=WA_DATA=%S/whatsapp
+StateDirectory=whatsapp
+UMask=0077
+TimeoutStopSec=10
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictRealtime=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

@@ -1,0 +1,45 @@
+
+# Rust build output
+/target/
+/build/
+
+# Debian packages and generated binaries
+*.deb
+*.rpm
+*.AppImage
+/package-folder/usr/bin/*
+
+# Local databases and database journals
+*.db
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+
+# Application runtime data and session secrets
+/data/
+/sessions/
+/secrets/
+*.key
+*.pem
+
+# Environment variables and local configuration
+.env
+.env.*
+!.env.example
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+
+# IDE/editor settings
+.idea/
+.vscode/
+*.iml
+
+# OS-generated files
+.DS_Store
+Thumbs.db

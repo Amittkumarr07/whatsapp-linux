@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=WhatsApp
+Comment=WhatsApp Linux Client
+Exec=/usr/bin/whatsapp-ui
+Icon=whatsapp-linux
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupNotify=true
+StartupWMClass=whatsapp-ui

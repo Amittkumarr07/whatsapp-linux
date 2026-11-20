@@ -1,0 +1,9 @@
+Package: whatsapp-linux
+Version: 0.1.0
+Section: net
+Priority: optional
+Architecture: amd64
+Maintainer: Amit Kumar amitkumar9110311
+Depends: libc6, libasound2
+Description: WhatsApp Linux Client
+ Native, lightweight Linux desktop client and background daemon for WhatsApp.

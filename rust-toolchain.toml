@@ -1,0 +1,4 @@
+# whatsapp-rust 0.5 pulls in wacore-binary with its default `simd` feature, which uses
+# #![feature(portable_simd)] and therefore needs nightly. Remove this once the pinned crates build on stable.
+[toolchain]
+channel = "nightly"
